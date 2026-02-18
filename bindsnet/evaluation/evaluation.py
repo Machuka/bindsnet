@@ -37,27 +37,37 @@ def assign_labels(
     spikes = spikes.sum(1)
     
     for i in range(n_labels):
-        # Create mask (faster and allows future steps to stay on GPU).
+        # Create mask.
         mask = (labels == i)
         # Count the number of samples with this label.
         n_labeled = mask.sum().float()
 
         if n_labeled > 0:
-            # Get indices of samples with this label (masking is faster and stays on the GPU).
+            # Get indices of samples with this label.
             label_sum = spikes[mask].sum(0)
             # Update rates.
             rates[:, i] = alpha * rates[:, i] + (label_sum / n_labeled)
 
-    # Compute proportions (and use 'torch.where' to avoid NaN bug).
+    # Compute proportions of spike activity per class.
     total_activity = rates.sum(1, keepdim=True)
     proportions = torch.where(total_activity > 0, rates / total_activity, torch.zeros_like(rates))
 
-    # Neuron assignments are the labels they fire most for.
-    max_vals, assignments = torch.max(proportions, 1)
+    # Noise for random tie breaking.
+    eps = 1e-6 # Small enough not to distort real decisions
+    noise = eps * torch.randn_like(proportions)
     
-    # Set unassigned (silent) neurons to -1 instead of defaulting to 0.
-    assignments[max_vals == 0] = -1 
+    # Neuron assignments are the labels they fire most for.
+    assignments = torch.argmax(proportions + noise, dim=1)
 
+    # Uniform assignment for silent neurons
+    silent_mask = total_activity.squeeze() == 0
+    n_silent = silent_mask.sum()
+
+    if n_silent > 0:
+        assignments[silent_mask] = torch.randint(
+            0, n_labels, (n_silent,), device=spikes.device
+        )
+    
     return assignments, proportions, rates
 
 
